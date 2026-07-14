@@ -6,6 +6,10 @@
   - 施工小弟（Subagents）：只在分配的 worktree/path 内实现；遵循该仓 AGENTS.md 与项目规范；
     禁止改 progress.md；禁止扩 scope；禁止自建/销毁 worktree。
   - Reviewer：sub-task 1 轮审核一轮改；epic 多轮收敛；禁止超 scope。
+  - 主 Agent:
+    - 如果你是 Codex 环境，subagent 可能会花非常漫长的时间来完成。
+      如果 subagent 持续运行中，禁止任何理由提前杀死。
+    - 如果你是 Claude Code 等系统会在完成时通知你的环境，则耐心等待即可。
 
   工件（主 Agent 维护）
   - ~/.cache/docs/<epic>/plan.md
