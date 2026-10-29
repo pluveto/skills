@@ -1,0 +1,299 @@
+# 前端开发规范
+
+技术栈（按需用，用不到的别装）：React · TypeScript · Vite · Zustand · Shadcn · React-Query · React-Router · TipTap · React-Hook-Form · Zod  · lucide-react（NO EMOJI!） · Sonner · TanStack Table · Motion · Recharts · Biome · Ky / Orval
+
+
+适用这套的地方都不许手搓！
+
+---
+
+## 1. 架构与文件组织
+
+- 必须遵循 SRP（单一职责）和 OCP（开闭原则），优先做边界清晰的小组件与小模块
+  - SRP：一个组件/Hook 只对一类「改动理由」负责。例：把请求、全局状态、渲染塞进同一个组件就违反——拆成数据 Hook / 容器组件 / 纯展示组件
+  - OCP：加新能力靠「加扩展点」而非「改既有分支」。例：每多一种卡片类型就去改一个大 `switch`/`if-else` = 坏味道；改成按 `type` 查表渲染（registry/map）或多态组件
+- **禁止"万能文件"（god file）**：一个文件只承载一个内聚的职责，禁止把无关内容堆进同一个文件。典型反例与正解：
+  - 禁止全局唯一的 `types.ts` 放下整个应用的所有类型 → 类型就近放在所属特性目录（`features/x/types.ts`），跨特性才下沉到 `shared/types`
+  - 禁止全局唯一的 `utils.ts` / `helpers.ts` 收纳一切工具函数 → 按子域拆分（`lib/date.ts`、`lib/format.ts`）
+  - 禁止全局唯一的 `global.css` / `styles.css` 堆所有组件样式 → 样式随组件就近（见「样式」章），全局样式只放 reset、CSS 变量、主题 token
+  - 禁止 `constants.ts` / `index.ts` 沦为无主题的杂物抽屉
+  - 判据：文件名是否能用一句话说清职责；若描述里出现"以及/各种/通用"等词，说明该拆了
+- 禁止文件膨胀。单个源文件原则上不应超过 300 行（不含样板代码）；组件接近上限时优先按职责拆分（容器/展示、子组件、hooks、utils）
+- 允许组件或 Hook 内部存在极短小的局部闭包/内联辅助逻辑，但默认禁止与组件、页面或 Hook 并列声明顶层游离函数
+- 禁止前端逻辑以零散顶层/游离函数的形式散落在 `src/` 根部、页面文件或特性目录根部；即使只服务单个组件/Hook，也应按职责收回组件内部，或拆成子组件、自定义 Hook、特性内模块
+- 这类逻辑的归属规则如下：
+  - 单一 UI 片段、单一交互分支、单一派生计算：优先收回当前组件/Hook 内部，或拆成更小的子组件
+  - 服务同一特性下的多个模块：下沉到该特性的 `hooks/`、`lib/`、`utils.ts`
+  - 形成稳定领域语义、状态约束或流程编排：抽成小模块、领域对象或自定义 Hook，而不是继续堆叠函数
+- 目录按特性（feature）组织并遵循"就近原则"：相关的类型、样式、hooks、子组件、测试放在同一文件夹下，而非按文件类型全局平铺
+- 当一组工具函数/组件开始共享稳定的子域语义或状态模型时，优先抽成 `hooks/`、`lib/` 或领域模型模块
+  - 例：三处组件各自手写「分页 + 排序 + 选中」的同一套状态逻辑 = 信号；抽成一个 `useTableState` Hook，而不是复制粘贴或继续往组件里堆参数
+- 新增对外导出/公共组件前，先判断是否确实有跨模块复用价值；内部实现保持私有
+  - 例：只被同目录一个组件用到的子组件/格式化函数，别急着加 `export` 升为公共 API——先留私有，等出现第二个真实调用方再上提
+- 禁止 `export * from './xxx'` 桶文件（barrel）做无差别再导出，易造成循环依赖与 tree-shaking 失效
+- Shadcn 组件放在 `components/ui`，作为基础原子层不掺杂业务逻辑；业务组件组合它们而非直接修改
+
+参考目录结构：
+
+```
+src/
+└── features/
+    └── user-profile/
+        ├── components/
+        │   ├── ProfileCard.tsx
+        │   ├── ProfileCard.spec.tsx
+        │   └── AvatarUpload.tsx
+        ├── hooks/
+        │   └── useUserProfile.ts
+        ├── types.ts          # this feature's types only
+        └── utils.ts          # this feature's utils only
+```
+
+## 2. 依赖与副作用边界
+
+承接第 1 章：文件拆干净之后，副作用权限仍可能藏在函数体里。本章约束「谁有权碰全局资源、这个权限有没有写在签名上」。这类问题本质是**全局数据（Global Data）**——可变的全局单例被暴露给太多地方，再叠加**依恋情结（Feature Envy）**——一个函数不停向别的模块要数据再自己做事。
+
+- **核心规则：函数与模块的签名应反映它的依赖与副作用权限。** 一个 op / helper / service 若在实现深处直接读写全局单例（Zustand store 的 `getState()`、模块级 `repos` / `selection` 等可变单例、CRDT doc factory 注册表、`window` / `document` 等 browser API），它的类型就在说谎：签名看着纯，实则依赖一片全局态。后果是 Review 只能靠通读实现找边界、单测只能启动整套全局态才跑得动、helper 深处可随手偷取全局单例。
+- **坏味道**（Review 按「未来改这块的风险」判，不只是「有味道」）：
+  - 签名像纯查询 / 纯转换，实现里却 `useXxx.getState()` 取全局态，或写回另一个 store——改这块逻辑得先摸清它偷偷碰了哪些全局态，漏一个就回归。
+  - 副作用散落在 helper 深处，而非集中在一个命名清楚的边界层——换实现或加账号隔离时要满仓找副作用点（霰弹式修改）。
+  - 依赖靠 `import` 某个全局 getter（如 `getRepos()`）拿到，而非经参数 / ctx / provider 传入——类型层不暴露权限，调用者和测试都看不出它要全局态。
+  - 模块拆了、文件边界清楚，但下层 helper 仍「偷取」全局单例。
+
+  反例（agent 工具 host 的 op，签名像纯查询，实现里读全局 work 态——Feature Envy）：
+
+  ```typescript
+  // Bad: signature reads like a pure lookup, but the body reads a global store.
+  // Neither the caller nor the type shows it; a test must boot the store first.
+  private currentFiles(): WorkspaceNode[] | null {
+    const workId = this.getWorkId()
+    if (!workId) return null
+    return useWorks.getState().byId[workId]?.files ?? null
+  }
+  ```
+
+- **推荐手法：函数参数化 + 封装变量**，两条路线常配合：
+  1. **函数参数化（Parameterize Function）**：把全局态作为入参传进来，op 退化成对入参的纯转换，依赖出现在签名里，测试直接喂 fixture。
+  2. **封装变量（Encapsulate Variable）**：全局资源确需被访问时，收进一个命名清楚的边界模块，只经它读写，不在各处 ad-hoc `getState()`。
+  行为若明显更贴另一个模块的数据，直接**搬移函数（Move Function）**过去，而不是隔空取数。
+
+  正例（参数化：依赖提到签名上，测试无需启动 store）：
+
+  ```typescript
+  // Good: the work snapshot is a parameter, so the dependency is in the signature.
+  function currentFiles(work: Work | null): WorkspaceNode[] | null {
+    return work?.files ?? null
+  }
+  ```
+
+  正例（封装变量：边界模块成对获取 / 释放全局资源，消费方只经它、在 effect 里用——CRDT doc gateway）：
+
+  ```typescript
+  // Good: getContentDoc/destroyContentDoc are the named boundary over the global
+  // Y.Doc registry. Consumers acquire and release as a pair inside an effect, so
+  // the refcount side effect lives in one place, not scattered across ops.
+  useEffect(() => {
+    if (!workspaceId || !docId) return
+    const handle = getContentDoc(workspaceId, docId) // acquire, refcount++
+    setDoc(handle.doc)
+    return () => {
+      setDoc(null)
+      void destroyContentDoc(workspaceId, docId) // release, refcount--
+    }
+  }, [workspaceId, docId])
+  ```
+
+- **边界模块要满足三条**（这是允许它碰全局的前提）：
+  1. **命名清楚**：名字直说它是边界、碰什么资源（`vault-writer` 模块、`getContentDoc`、`setActiveEditor`），不伪装成纯 helper。
+  2. **依赖方向清楚**：业务 op / 纯转换在上，边界在下且单向；上层拿到的是传入的快照或结果，不自己去 `getState()`。签名里出现依赖 = 权限被暴露。
+  3. **测试策略清楚**：纯逻辑用注入的依赖 / 快照覆盖分支；边界模块单独测或用替身。不允许「想测一个分支必须启动整套全局单例」。
+- **边界返回全局资源要 fail loud，并把空值挡在边界层**。资源未初始化、或正处于账号 / 会话切换过程中时，边界要让失败可判定——不能静默当无事发生，也不能返回上一个账号的陈旧实例。例：模块级 `getRepos()` 在启动前或账号切换后被调用，若直接返回 `null` 而调用点不检查、或返回切换前账号的 repos，写操作会落到错的地方或悄悄丢失。把 `null` / 未就绪状态在边界层处理掉（要么保证给的是当前账号的实例，要么显式报错交上层），不要让每个下层函数都被迫处理空值。
+- **例外——可以直接持有全局的顶层边界**（不为此引入 DI 框架 / service locator，只要遵守上面三条）：
+  - **store 定义与 action**：在自己 store 内读写自己的 state 是本分（见第 5 章）；但 action 伸手进**另一个** store 的 `getState()` 就越界了——改成经参数传入，或把跨 store 编排收进一个命名清楚的协调层。
+  - **持久化 / 同步 writer**：如 vault writer，订阅若干 store 落盘、并上报保存状态，本身就是碰全局的边界；命名要直说、依赖单向（它依赖 store，不反向）、对外签名能看出它写全局。
+  - **资源工厂 / 注册表**：如 CRDT doc factory 的 `getContentDoc` / `destroyContentDoc`，持有全局注册表并 refcount；消费方成对获取释放、经 effect 使用，不在 op 深处 ad-hoc 抓取。
+  - **生命周期绑定**：如 `setActiveEditor` / `getActiveSelection` 这类模块级单例，只在明确的组件生命周期（effect 的 setup / cleanup）里注册注销，读取集中到边界函数，不散到各 helper。
+
+## 3. 类型系统与建模
+
+- 严格 TypeScript：`strict: true`，禁止隐式 `any`
+- 禁止使用 `any`。确实未知用 `unknown` 并在使用点收窄；逃生通道需注释说明原因
+- 禁止用 `as` 做类型断言绕过检查；优先类型守卫（type guard）与 `satisfies`。`as const` 例外
+- 外部数据边界（API 响应、URL 参数、localStorage、表单）必须用 schema 校验（如 zod）后再进入类型系统，不要直接 `as Response`
+- 对外长期复用的公共类型用 `interface`；联合、映射、工具类型用 `type`，不要机械二选一
+- 有限状态优先用字面量联合（`'idle' | 'loading' | 'error'`），不要用零散 `boolean` 拼状态
+- 纯开关语义允许使用 `boolean`，例如 `disabled`、`isOpen`、`dryRun`
+- **布尔值陷阱**：当一个标志的语义已不是纯二值（如 `isLoading` vs `isFetching` vs `isRefetching`），或多个 `boolean` 出现互斥/扩展趋势时，必须改用 discriminated union 建模，避免出现非法状态组合：
+
+  ```typescript
+  // Forbidden
+  type AsyncState = { isLoading: boolean; isError: boolean };
+  // Recommended
+  type AsyncState<T> =
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'success'; data: T }
+    | { status: 'error'; error: Error };
+  ```
+
+- 需要区分的业务标识用品牌化类型（branded type），不要用裸 `type UserId = string` 这种空洞别名（无法防止 `userId` 与 `orderId` 互相误传）：
+
+  ```typescript
+  // Forbidden
+  type UserId = string;
+  // Recommended
+  type UserId = string & { readonly __brand: 'UserId' };
+  ```
+
+- **组件样式控制**：公共组件禁止把可自由传入任意 CSS 的 `className` 作为外观 API；应通过 `variant` / `size` 等受控枚举约束可能的外观组合（`className` 仅用于布局微调，不用于改主题）
+- 派生类型优先用 `Pick` / `Omit` / `ReturnType` 等，避免手抄重复定义导致漂移
+- 时间统一在边界处规范化（ISO 8601 字符串 / `Date`），组件内不混用多种时间表示
+- props 过多（经验值 > 5 个）时考虑用对象聚合或拆分组件，不要长期保留参数爆炸的组件
+
+## 4. 错误处理
+
+- 跨模块稳定传播、上层需程序化分支的错误，用显式错误类型/枚举建模，不要靠字符串 `message` 判断
+  - 反例：`if (err.message.includes('unauthorized'))` = 文案一改就崩；改成带可辨识 `kind`/`code` 字段的错误类型（如 discriminated union），上层按 `kind` 分支
+- 异步操作的错误必须被处理：要么 `try/catch`，要么交给 React-Query 的 `error` 状态，禁止吞掉（空 catch）
+- 捕获后重新抛出或包装时不得丢失原始错误，使用 `cause`（`new Error('...', { cause })`）保留链路
+- 非空断言 `!` 仅允许在逻辑上不可能为空且有充分上下文处；生产代码尽量用守卫或默认值替代
+- 超时错误与普通网络错误要区分，让上层能判断是否重试
+  - 例：超时 / 5xx 可自动重试并提示「重试中」；4xx（参数错、未授权）不该重试，应直接引导用户改输入或重新登录
+- 每个数据加载边界要有 Error Boundary 兜底，避免单点错误整页白屏；全局至少有一个根 Error Boundary
+  - 例：路由级页面、独立的侧栏/小部件各自包一层边界——某个 widget 拉取失败只让它自己显降级 UI，不连累整页
+- 错误按类型给出口：网络/服务端错误提供"重试"与"返回安全页"；预期内业务错误（如校验失败）就近展示并指导用户修正
+- 面向用户的错误文案与面向开发者的日志分离，错误上报默认脱敏（不带 token、PII）
+- `console.log` 禁止进入生产代码；`console.error` 仅用于对接现有日志系统，不得作为主要错误处理手段
+
+## 5. 状态管理（Zustand · React-Query）
+
+- 区分服务端状态与客户端状态：服务端数据（请求结果、缓存）一律交给 React-Query，禁止把请求结果手动塞进 Zustand 再维护一份
+  - 例：用户列表、文章详情这类"来自后端、会过期"的数据进 React-Query；"侧栏是否折叠""当前选中的 tab"这类纯前端态才进 Zustand/`useState`
+- Zustand 只放真正的全局客户端状态（UI 偏好、会话、跨页面共享的临时态）；能用局部 `useState` 的不要上全局
+  - 例：一个 Modal 的开关只有它自己和触发按钮用 = 过度全局化；改成就近的 `useState` 或父组件局部态，不进全局 store
+- 禁止在 Zustand 里手写数据获取、缓存或重新获取逻辑——那是 React-Query 的职责
+- Zustand selector 必须原子化、细粒度订阅（`useStore(s => s.x)`），禁止订阅整个 store 导致无谓重渲染；派生复杂状态时用自定义相等性比较函数（`useShallow` / `createWithEqualityFn`）
+- Zustand action 与 state 同 store 定义，状态变更只经 action，禁止组件内直接 mutate
+- store 按领域切片（slices），避免单一巨型 store
+  - 例：把 auth、编辑器、通知全塞进一个 store = 巨型 store，关注点纠缠、改动牵连面大；按领域拆成独立 slice/store 各自演进
+- React-Query 的 `queryKey` 必须结构化、层级化（从通用到具体），并包含全部依赖参数，便于批量失效：
+
+  ```typescript
+  ['users', 'list', { status: 'active' }]
+  ['users', 'detail', userId]
+  ```
+
+- 变更后用 `invalidateQueries` 或精确更新缓存，不要手动刷新页面
+- 乐观更新必须写回滚逻辑（`onError` 还原），并在 `onSettled` 处理服务端返回的最终状态
+- 合理设置 `staleTime` / `gcTime`，区分"实时性要求高"与"可缓存"的数据，不要全局一刀切
+  - 例：未读数、在线状态这类实时数据 `staleTime` 设很短甚至 0；国家列表、枚举字典这类基本不变的设很长，避免每次窗口聚焦都重取
+- 副作用放进 mutation 的回调或 effect，不要写在渲染期
+
+## 6. 组件与渲染
+
+- 组件保持纯函数语义：相同 props 渲染相同结果，副作用只进 `useEffect` / 事件处理
+  - 例：渲染期直接 `localStorage.setItem()`、改外部变量或发请求都是副作用 = 违反纯函数；搬进 `useEffect` 或事件回调里
+- `useEffect` 依赖数组必须完整且正确，禁止用注释屏蔽 lint 来"骗"依赖；不需要的同步逻辑不要放进 effect
+  - 例：用 effect 监听 props 再 `setState` 同步出另一份 state = 多余 effect；能在渲染期由 props/已有 state 直接算出的值不要走 effect
+- 列表渲染的 `key` 必须稳定唯一，禁止用数组下标作为可变列表的 key
+- 避免在渲染中创建新引用导致子组件重渲染；必要时用 `useMemo` / `useCallback`，但不要过早优化
+  - 例：给只渲染纯文本的轻组件包一堆 `useMemo` = 过早优化；只有当下游组件 `React.memo` 且该值是其引用型 prop、或计算确实昂贵时才值得 memo 化
+- 衍生数据在渲染期计算，不要用 effect + state 同步出一份冗余状态，也不要把可计算值存进 store
+- 组件文件中的辅助函数无论是否共享，都不应以与组件并列的顶层函数形式长期存在；单组件私有逻辑收回组件内部，跨组件逻辑提取到当前特性的明确模块
+  - 例：组件文件里与组件并列的 `function formatLabel()` 只此组件用 = 收进组件内部；多个组件共用则提到该特性的 utils 模块，而非散落在某个组件文件顶层
+- 禁止 props 钻取（prop drilling）：当 props 需穿过一层以上不消费它的中间组件时，改用组合（children/slot）、复合组件，或重新考虑状态归属
+- 具有清晰父子关系的可组合 UI 优先用复合组件模式（Compound Components），而非一个庞杂的配置对象：
+
+  ```tsx
+  <Select value={value} onChange={setValue}>
+    <Select.Trigger />
+    <Select.Options>
+      <Select.Option value="1">Option 1</Select.Option>
+    </Select.Options>
+  </Select>
+  ```
+
+- 受控/非受控二选一，不要混用；表单优先用成熟方案（react-hook-form + zod 校验）
+- 用户输入、动态数据、富文本（TipTap 输出）的渲染必须经 XSS 防护；禁止使用 `dangerouslySetInnerHTML`，确需时必须先经净化（如 DOMPurify）并集中封装
+- 可访问性（a11y）是硬性要求：交互元素用语义化标签、保证键盘可达、Shadcn 的 aria 属性不要删
+
+## 7. 路由（React-Router）
+
+- 路由配置集中声明，按特性懒加载（`lazy` + `Suspense`），首屏只加载必要 chunk
+- 禁止在各组件内硬编码路径字符串，路径常量/构造函数集中管理，便于重构与类型校验
+- 页面级组件与展示型组件职责分离：页面组件负责编排路由参数、数据获取、元信息；展示组件只通过 props 接收数据并渲染
+  - 例：把"读 URL 里的 id → 取数 → 设页面标题"塞进一个纯展示卡片里 = 职责混淆、难复用；让页面组件做编排，卡片只收 props 渲染
+- 路由参数、search params 视为外部输入，使用前校验，不要直接信任
+  - 例：`const page = Number(searchParams.get('page'))` 直接用 = 信任外部输入；先校验/兜底（如 zod 或默认值），非法值回退而不是让 `NaN` 流进请求
+- 鉴权/权限在路由层用 loader 或守卫组件统一拦截，不要散落在各页面组件里
+  - 例：每个页面组件各写一遍"未登录就 redirect" = 散落、易漏一处；在路由 loader 或一个守卫组件里统一拦截，子页面默认已鉴权
+- 数据获取优先用 loader 或在组件内用 React-Query，避免"进页面才串行请求"的瀑布
+  - 例：进页面才 A 请求完拿到 id 再发 B、B 完再发 C = 串行瀑布、首屏慢；能并行的在 loader 里一起发起，或用 React-Query 并发 + 预取
+- 导航用 `Link` / `navigate`，禁止用 `window.location` 做应用内跳转（除非确需整页刷新）
+
+## 8. 编辑器（TipTap）
+
+- TipTap 的 Editor 实例通过 `useEditor` 管理生命周期，组件卸载时必须 `destroy`，避免内存泄漏
+- 自定义功能优先封装为 Extension / Node / Mark，不要在组件里散写 ProseMirror 命令
+  - 例：在工具栏组件里直接 `editor.chain().focus()...` 拼一长串命令实现"插入引用块" = 散写；改成封装成一个语义化命令/扩展，组件只调用它
+- 编辑器内容的持久化做防抖/节流，不要每次 keystroke 都写库或入全局 store
+- 渲染外部 HTML 必须净化（如 DOMPurify），禁止未过滤内容直接灌入编辑器，防 XSS
+- 内容的 schema 与序列化格式（JSON / HTML）要统一约定，跨版本保持兼容
+  - 例：A 处存 HTML、B 处存 JSON，迁移时互不认 = 坏味道；定一种权威格式，另一种只作渲染派生
+  - 例：新增节点类型后老文档一解析就报错 = 不兼容；要能让旧内容降级渲染或走迁移，不直接崩
+- 编辑器配置与扩展注册集中为一个模块导出，不要每个用到的页面各写一套
+- 对编辑器外部状态（主题、只读模式等）的监听必须在对应 hook 的清理函数中解绑
+
+## 9. 样式（Tailwind · Shadcn）
+
+- 主题化必须走 Shadcn 的 CSS 变量系统；禁止在内联样式或组件中硬编码颜色、阴影、圆角等设计 token
+- 自定义样式优先用 Tailwind 工具类；除复杂动画或第三方库覆盖外，不写冗长的语义化 CSS 类名
+  - 例：同一串工具类在多处复制粘贴 = 该抽成组件或用 `cn()` 复用，而不是各处分别维护；但只出现一两次的样式别为"将来可能复用"提前抽组件（YAGNI）
+- 全局样式表只放 reset、CSS 变量、主题 token，**禁止把组件样式堆进全局 CSS**（见第 1 章「万能文件」）；组件样式随组件就近
+- 动画与过渡必须尊重 `prefers-reduced-motion` 用户偏好
+
+## 10. 性能、构建与工程化
+
+- 代码分割按路由与重组件（编辑器、图表）懒加载；用 Vite 的动态 `import()` 切包
+  - 例：首屏用不到的大依赖（富文本编辑器、图表库、Markdown 渲染器）才值得 `import()` 切出去；首屏必现的小组件别为分包而分包，反而多一轮请求瀑布
+- 禁止在渲染路径中创建不稳定引用；回调、选项对象等用 `useCallback` / `useMemo` 稳定化（但不要过早优化）
+- Context 按变化频率拆分：高频变化的状态与稳定状态分属不同 Provider，避免大范围重渲染
+  - 例：把"每帧都变的鼠标坐标/滚动位置"和"很少变的当前用户"塞进同一个 Provider，所有消费者都跟着高频重渲 = 坏味道；按变化频率拆成两个 Provider
+- 避免热路径（滚动、输入、动画帧）中做重计算、深克隆或新建大对象；必要处节流/防抖
+  - 例：`onScroll`/`onChange`/`requestAnimationFrame` 里 `JSON.parse(JSON.stringify(big))` 深克隆或全量排序 = 卡顿源；移出热路径、缓存结果，或对触发做防抖
+- 长列表用虚拟化（virtualization），不要一次性渲染上千 DOM 节点
+- 图片与静态资源走构建优化，注意按需引入图标/组件库，杜绝整库引入
+  - 例：`import * as Icons from 'icon-lib'` 或 `import _ from 'lodash'` = 整库进 bundle；改成 `import { Check } from 'icon-lib'` / `import debounce from 'lodash/debounce'` 按需取
+- 环境配置走 Vite env（`import.meta.env`），密钥不进前端仓库；区分 dev/prod
+- 提交前必须通过 `tsc --noEmit`、ESLint、Prettier；CI 强制门禁，禁止 `// eslint-disable` 大面积兜底
+
+## 11. 测试
+
+- 业务逻辑单元（hooks、工具函数、状态管理）必须有单元测试（Vitest）
+- 核心用户路径（注册、结账、关键数据编辑等）必须有集成测试，用 `@testing-library/react` 从用户视角编写，测交互行为而非实现细节
+- 纯展示型组件（无交互、无状态依赖）的 UI 快照测试价值低，不强制编写
+  - 例：给纯展示组件加快照，改个 className 就整片失败却测不出真 bug；把测试投到有分支逻辑、状态流转、用户交互的地方
+- 测试描述说明"行为 + 期望结果"，而非方法名：
+
+  ```typescript
+  // Not recommended
+  it('test useCounter increment', () => {});
+  // Recommended
+  it('should increment the count by 1 when called', () => {});
+  ```
+
+## 12. 起 dev server 给用户浏览器验收
+
+给用户在浏览器里验收时,默认满足这两点(否则多半「打不开」,用户常从别的设备访问):
+
+- **绑局域网**:带 `--host 0.0.0.0`,不要只起 localhost。用 LAN / Tailscale **IP** 访问可绕过 vite
+  `allowedHosts` 主机名校验;若要用主机名访问被拦,设 `DEV_HOST=<host>`。
+- **用 HTTPS**:设 `VITE_HTTPS=1`(无真实证书时自动挂 basic-ssl 自签,浏览器点「继续」即可;且
+  https 下会自动绑 LAN)。同源 `wss /v1/chat/ws` 由 vite 终止后转发到网关,聊天照常。
+
+接本地后端:`.env.local` 写 `VITE_BACKEND=http://localhost:8080`(网关)+ `VITE_USE_MOCK=0`,
+dev 代理把同源 `/v1/*` 转发过去。端口被占(主前端常占 1420)用 `DASHBOARD_PORT=<其它>`(`strictPort`
+要求端口空)。隔离 worktree 里 pnpm 因缺 `api-contract` workspace 包会卡 install 闸 → 直接跑
+`node_modules/.bin/vite`(node_modules 软链回主仓检出)。
+
+最后，遵循其它通用的规范（例如语义化空行、SOLID 原则等）
