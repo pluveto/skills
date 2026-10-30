@@ -26,8 +26,8 @@
 3. 执行手动验证脚本：`curl -X POST http://localhost:3000/api/v2/login ...`
 4. 预期结果：返回状态码 200 并携带刷新后的 Token。
 
-## 📸 效果展示 (Screenshots / UI Changes)
-<!-- 前端/UI 改动强烈建议提供前后对比截图、GIF 或短视频 -->
+## 📸 效果展示 (Screenshots / UI Changes / Perf Changes...)
+<!-- 前端/UI 改动强烈建议提供前后对比截图、GIF 或短视频，优化则体现具体数字。表格格式可自定义。 -->
 | Before | After |
 | :---: | :---: |
 | ![before](url) | ![after](url) |
