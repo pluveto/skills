@@ -25,13 +25,14 @@
 | **通用工程** | [通用整洁工程规范](https://github.com/pluveto/skills/raw/refs/heads/main/%E9%80%9A%E7%94%A8%E6%95%B4%E6%B4%81%E5%B7%A5%E7%A8%8B%E8%A7%84%E8%8C%83.md) | 全员必读 |
 | **命名规范** | [标题规范](https://github.com/pluveto/skills/raw/refs/heads/main/%E6%A0%87%E9%A2%98%E7%BC%96%E5%86%99%E8%A7%84%E8%8C%83.md) | PR、MR、文档、任务命名必读 |
 | **PR/MR 描述** | [高情商 PR 描述](https://raw.githubusercontent.com/pluveto/skills/refs/heads/main/%E9%AB%98%E6%83%85%E5%95%86PR%E6%8F%8F%E8%BF%B0.md) |  |
+| **AST 检索与改写** | [AST 代码检索与改写指南](https://raw.githubusercontent.com/pluveto/skills/refs/heads/main/AST%20%E4%BB%A3%E7%A0%81%E6%A3%80%E7%B4%A2%E4%B8%8E%E6%94%B9%E5%86%99%E6%8C%87%E5%8D%97.md) | `ast-bro` / `ast-grep` 选用与操作指南 |
 
 ---
 
 ## 二、 环境与工具执行规范
 
 ### 1. 本机 CLI 环境
-- **`git/gh/rg/tokei/glab/ast-bro`**：已安装，可直接调用。
+- **`git/gh/rg/tokei/glab/ast-bro/ast-grep`**：已安装，可直接调用（`ast-bro` 与 `ast-grep` 详见 [AST 代码检索与改写指南](AST%20%E4%BB%A3%E7%A0%81%E6%A3%80%E7%B4%A2%E4%B8%8E%E6%94%B9%E5%86%99%E6%8C%87%E5%8D%97.md)）。
 - **`lark-cli`**：已配置为 `strict-mode user`。
   - **沙箱限制**：**必须直接在沙箱外运行**。
 
